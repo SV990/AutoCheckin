@@ -2,7 +2,8 @@
 NodeLoc 每日自动签到脚本
 - 使用 curl_cffi 模拟浏览器 TLS 指纹，绕过 Cloudflare 检测
 - 支持每日 00:00-06:00 时间段随机签到
-- 支持飞书 Webhook 推送签到结果
+- 支持飞书/企业微信/Telegram Webhook 推送签到结果
+- 支持获取签到IP信息
 """
 
 import os
@@ -14,13 +15,66 @@ import json
 import hmac
 import hashlib
 import base64
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 try:
     from curl_cffi import requests
 except ImportError:
     print("[ERROR] 请先安装 curl_cffi: pip install curl_cffi")
     sys.exit(1)
+
+# 北京时间
+CST = timezone(timedelta(hours=8))
+
+
+def now_cst():
+    """获取当前北京时间"""
+    return datetime.now(CST)
+
+
+def mask_account(account):
+    """脱敏账号：保留首尾字符"""
+    if not account or "@" not in account:
+        return account[:3] + "***" if len(account) > 3 else "***"
+    local, domain = account.split("@", 1)
+    if len(local) <= 2:
+        masked_local = local[0] + "*"
+    else:
+        masked_local = local[0] + "*" * (len(local) - 2) + local[-1]
+    return f"{masked_local}@{domain}"
+
+
+def get_ip_info():
+    """获取当前公网IP信息"""
+    apis = [
+        "https://api.ip.sb/geoip",
+        "https://ipapi.co/json/",
+    ]
+    for api_url in apis:
+        try:
+            resp = requests.get(api_url, timeout=10)
+            if resp.status_code == 200:
+                data = resp.json()
+                ip = data.get("ip", data.get("IPv4", "未知"))
+                if not ip or ip == "未知":
+                    continue
+                location_parts = []
+                if data.get("country"):
+                    location_parts.append(data["country"])
+                if data.get("region"):
+                    location_parts.append(data["region"])
+                if data.get("city"):
+                    location_parts.append(data["city"])
+                location = " / ".join(location_parts) if location_parts else "未知"
+                isp = data.get("isp", data.get("org", ""))
+                info = f"**IP**: {ip}\n**位置**: {location}"
+                if isp:
+                    info += f"\n**ISP**: {isp}"
+                return info
+        except Exception as e:
+            print(f"[WARNING] IP接口 {api_url} 失败: {e}")
+            continue
+    return "**IP**: 未知"
 
 
 class FeishuNotifier:
@@ -31,7 +85,6 @@ class FeishuNotifier:
         self.secret = secret
 
     def _gen_sign(self, timestamp):
-        """生成飞书签名（如果开启了签名校验）"""
         if not self.secret:
             return None
         string_to_sign = f"{timestamp}\n{self.secret}"
@@ -43,7 +96,6 @@ class FeishuNotifier:
         return base64.b64encode(hmac_code).decode("utf-8")
 
     def send_message(self, title, content):
-        """发送飞书消息"""
         try:
             timestamp = str(int(time.time()))
             payload = {
@@ -57,17 +109,14 @@ class FeishuNotifier:
                     "elements": [
                         {
                             "tag": "div",
-                            "text": {
-                                "tag": "lark_md",
-                                "content": content,
-                            },
+                            "text": {"tag": "lark_md", "content": content},
                         },
                         {
                             "tag": "note",
                             "elements": [
                                 {
                                     "tag": "plain_text",
-                                    "content": f"签到时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                                    "content": f"签到时间: {now_cst().strftime('%Y-%m-%d %H:%M:%S')}",
                                 }
                             ],
                         },
@@ -75,7 +124,6 @@ class FeishuNotifier:
                 },
             }
 
-            # 如果设置了签名密钥，添加签名
             sign = self._gen_sign(timestamp)
             if sign:
                 payload["timestamp"] = timestamp
@@ -86,6 +134,7 @@ class FeishuNotifier:
                 json=payload,
                 headers={"Content-Type": "application/json"},
                 impersonate="chrome120",
+                timeout=10,
             )
             if response.status_code == 200:
                 result = response.json()
@@ -103,6 +152,81 @@ class FeishuNotifier:
             return False
 
 
+class WeComNotifier:
+    """企业微信 Webhook 通知器"""
+
+    def __init__(self, webhook_url):
+        self.webhook_url = webhook_url
+
+    def send_message(self, title, content):
+        try:
+            payload = {
+                "msgtype": "markdown",
+                "markdown": {
+                    "content": f"## {title}\n{content}\n> 签到时间: {now_cst().strftime('%Y-%m-%d %H:%M:%S')}"
+                }
+            }
+            response = requests.post(
+                self.webhook_url,
+                json=payload,
+                headers={"Content-Type": "application/json"},
+                impersonate="chrome120",
+                timeout=10,
+            )
+            if response.status_code == 200:
+                result = response.json()
+                if result.get("errcode") == 0:
+                    print("[INFO] 企业微信通知发送成功")
+                    return True
+                else:
+                    print(f"[ERROR] 企业微信通知发送失败: {result.get('errmsg')}")
+                    return False
+            else:
+                print(f"[ERROR] 企业微信通知请求失败: HTTP {response.status_code}")
+                return False
+        except Exception as e:
+            print(f"[ERROR] 企业微信通知发送异常: {e}")
+            return False
+
+
+class TelegramNotifier:
+    """Telegram Bot 通知器"""
+
+    def __init__(self, bot_token, chat_id):
+        self.bot_token = bot_token
+        self.chat_id = chat_id
+        self.api_url = f"https://api.telegram.org/bot{bot_token}"
+
+    def send_message(self, title, content):
+        try:
+            text = f"<b>{title}</b>\n\n{content}\n\n<i>签到时间: {now_cst().strftime('%Y-%m-%d %H:%M:%S')}</i>"
+            response = requests.post(
+                f"{self.api_url}/sendMessage",
+                json={
+                    "chat_id": self.chat_id,
+                    "text": text,
+                    "parse_mode": "HTML",
+                },
+                headers={"Content-Type": "application/json"},
+                impersonate="chrome120",
+                timeout=10,
+            )
+            if response.status_code == 200:
+                result = response.json()
+                if result.get("ok"):
+                    print("[INFO] Telegram通知发送成功")
+                    return True
+                else:
+                    print(f"[ERROR] Telegram通知发送失败: {result.get('description')}")
+                    return False
+            else:
+                print(f"[ERROR] Telegram通知请求失败: HTTP {response.status_code}")
+                return False
+        except Exception as e:
+            print(f"[ERROR] Telegram通知发送异常: {e}")
+            return False
+
+
 class NodeLocCheckin:
     def __init__(self, username, password):
         self.base_url = "https://www.nodeloc.com"
@@ -113,14 +237,14 @@ class NodeLocCheckin:
         self.user_id = None
 
     def get_csrf_token(self):
-        """通过 Discourse API 获取 CSRF Token"""
         try:
             response = self.session.get(
                 f"{self.base_url}/session/csrf.json",
                 headers={
                     "Accept": "application/json",
                     "X-Requested-With": "XMLHttpRequest",
-                }
+                },
+                timeout=15,
             )
             if response.status_code == 200:
                 data = response.json()
@@ -135,7 +259,6 @@ class NodeLocCheckin:
             return False
 
     def login(self):
-        """登录 NodeLoc"""
         try:
             if not self.csrf_token:
                 if not self.get_csrf_token():
@@ -161,6 +284,7 @@ class NodeLocCheckin:
                 f"{self.base_url}/session.json",
                 data=login_data,
                 headers=headers,
+                timeout=15,
             )
 
             if response.status_code == 200:
@@ -195,9 +319,7 @@ class NodeLocCheckin:
             return False
 
     def checkin(self):
-        """执行签到"""
         try:
-            # 登录后重新获取 CSRF token
             if not self.get_csrf_token():
                 print("[WARNING] 无法获取新的 CSRF Token，尝试使用现有 token")
 
@@ -224,17 +346,24 @@ class NodeLocCheckin:
                 f"{self.base_url}/checkin",
                 json=checkin_data,
                 headers=headers,
+                timeout=15,
             )
 
             if response.status_code == 200:
                 result = response.json()
                 if result.get("success"):
                     points = result.get("points", 0)
+                    message = result.get("message", "")
                     print(f"[SUCCESS] 签到成功！获得 {points} 点能量")
-                    return True, f"签到成功，获得 {points} 点能量", points
+                    return True, message or f"签到成功，获得 {points} 点能量", points
                 else:
                     message = result.get("message", "未知错误")
-                    if "already" in str(message).lower() or "签到" in str(message):
+                    msg_str = str(message)
+                    # 成功状态：包含"签到"关键词且不是失败/错误
+                    if ("签到" in msg_str
+                            and "失败" not in msg_str
+                            and "错误" not in msg_str
+                            and "限制" not in msg_str):
                         print(f"[INFO] {message}")
                         return True, message, 0
                     print(f"[ERROR] 签到失败: {message}")
@@ -243,8 +372,10 @@ class NodeLocCheckin:
                 error_msg = f"HTTP {response.status_code}"
                 try:
                     error_data = response.json()
-                    error_msg = str(error_data)[:100]
-                except:
+                    msg = error_data.get("message", "")
+                    if msg:
+                        error_msg = str(msg)[:100]
+                except Exception:
                     pass
                 print(f"[ERROR] 签到请求失败: {error_msg}")
                 return False, error_msg, 0
@@ -254,24 +385,20 @@ class NodeLocCheckin:
             return False, str(e), 0
 
     def run(self):
-        """运行完整的签到流程"""
         print(f"{'=' * 50}")
         print(f"NodeLoc 自动签到脚本")
-        print(f"运行时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"运行时间: {now_cst().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"{'=' * 50}")
         print()
 
-        # Step 1: 获取 CSRF Token
         print("[STEP 1] 获取 CSRF Token...")
         if not self.get_csrf_token():
             return False, "获取 CSRF Token 失败", 0
 
-        # Step 2: 登录
         print("\n[STEP 2] 登录...")
         if not self.login():
             return False, "登录失败", 0
 
-        # Step 3: 签到
         print("\n[STEP 3] 执行签到...")
         success, message, points = self.checkin()
 
@@ -283,60 +410,76 @@ class NodeLocCheckin:
 
 
 def is_in_checkin_time():
-    """检查当前是否在签到时间段 (00:00-06:00)"""
-    now = datetime.now()
+    """检查当前是否在签到时间段 (00:00-06:00 北京时间)"""
+    now = now_cst()
     return 0 <= now.hour < 6
 
 
 def random_delay():
-    """在签到时间段内随机等待一段时间（模拟随机签到）"""
-    now = datetime.now()
+    now = now_cst()
     if not is_in_checkin_time():
-        return 0  # 不在签到时间段，不等待
+        print(f"[INFO] 当前时间 {now.strftime('%H:%M')} 非签到时段，直接签到")
+        return 0
 
-    # 计算到 06:00 还剩多少秒
     end_time = now.replace(hour=6, minute=0, second=0, microsecond=0)
     remaining = (end_time - now).total_seconds()
-
-    # 随机等待时间：0 到 剩余时间的 50%
-    max_wait = min(remaining * 0.5, 3600)  # 最多等待 1 小时
+    max_wait = min(remaining * 0.5, 3600)
     if max_wait <= 0:
         return 0
 
     wait_seconds = random.randint(0, int(max_wait))
-    print(f"[INFO] 随机延迟 {wait_seconds} 秒后签到...")
+    print(f"[INFO] 签到时段，随机延迟 {wait_seconds} 秒后签到...")
     time.sleep(wait_seconds)
     return wait_seconds
 
 
+def send_all_notifications(title, content, config):
+    """发送所有已配置的通知"""
+    # 飞书
+    feishu_webhook = config.get("feishu_webhook", "")
+    feishu_secret = config.get("feishu_secret", "")
+    if feishu_webhook:
+        notifier = FeishuNotifier(feishu_webhook, feishu_secret)
+        notifier.send_message(title, content)
+
+    # 企业微信
+    wecom_webhook = config.get("wecom_webhook", "")
+    if wecom_webhook:
+        notifier = WeComNotifier(wecom_webhook)
+        notifier.send_message(title, content)
+
+    # Telegram
+    tg_bot_token = config.get("tg_bot_token", "")
+    tg_chat_id = config.get("tg_chat_id", "")
+    if tg_bot_token and tg_chat_id:
+        notifier = TelegramNotifier(tg_bot_token, tg_chat_id)
+        notifier.send_message(title, content)
+
+
 def main():
-    # 从环境变量获取配置
     username = os.environ.get("NODELOC_USERNAME", "")
     password = os.environ.get("NODELOC_PASSWORD", "")
-    feishu_webhook = os.environ.get("FEISHU_WEBHOOK_URL", "")
-    feishu_secret = os.environ.get("FEISHU_SECRET", "")
     force_checkin = os.environ.get("FORCE_CHECKIN", "").lower() == "true"
+
+    # 通知配置
+    config = {
+        "feishu_webhook": os.environ.get("FEISHU_WEBHOOK_URL", ""),
+        "feishu_secret": os.environ.get("FEISHU_SECRET", ""),
+        "wecom_webhook": os.environ.get("WECOM_WEBHOOK_URL", ""),
+        "tg_bot_token": os.environ.get("TELEGRAM_BOT_TOKEN", ""),
+        "tg_chat_id": os.environ.get("TELEGRAM_CHAT_ID", ""),
+    }
 
     if not username or not password:
         print("[ERROR] 请设置 NODELOC_USERNAME 和 NODELOC_PASSWORD 环境变量")
-        print("       Windows PowerShell: $env:NODELOC_USERNAME='your@email.com'; $env:NODELOC_PASSWORD='your_password'")
-        print("       Linux/macOS: export NODELOC_USERNAME='your@email.com' && export NODELOC_PASSWORD='your_password'")
+        print("       Windows: $env:NODELOC_USERNAME='email'; $env:NODELOC_PASSWORD='pass'")
+        print("       Linux: export NODELOC_USERNAME='email' && export NODELOC_PASSWORD='pass'")
         sys.exit(1)
 
-    # 检查签到时间
-    if not force_checkin and not is_in_checkin_time():
-        now = datetime.now()
-        print(f"[INFO] 当前时间 {now.strftime('%H:%M:%S')} 不在签到时间段 (00:00-06:00)，跳过签到")
-        # 非签到时间段发送通知
-        if feishu_webhook:
-            notifier = FeishuNotifier(feishu_webhook, feishu_secret)
-            notifier.send_message(
-                "⏰ NodeLoc 签到跳过",
-                f"**当前时间**: {now.strftime('%Y-%m-%d %H:%M:%S')}\n**状态**: 非签到时间段 (00:00-06:00)，跳过签到"
-            )
-        sys.exit(0)
+    # 获取IP信息
+    ip_info = get_ip_info()
 
-    # 随机延迟
+    # 签到时段随机延迟，其他时段直接签到
     if not force_checkin:
         random_delay()
 
@@ -344,27 +487,29 @@ def main():
     checkin = NodeLocCheckin(username, password)
     success, message, points = checkin.run()
 
-    # 飞书通知
-    if feishu_webhook:
-        notifier = FeishuNotifier(feishu_webhook, feishu_secret)
-        now = datetime.now()
+    # 构建通知内容（账号脱敏）
+    masked_account = mask_account(username)
+    now = now_cst()
+    if success:
+        title = "✅ NodeLoc 签到成功"
+        content = (
+            f"**账号**: {masked_account}\n"
+            f"**状态**: {message}\n"
+            f"**获得能量**: {points} 点\n"
+            f"**时间**: {now.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"---\n{ip_info}"
+        )
+    else:
+        title = "❌ NodeLoc 签到失败"
+        content = (
+            f"**账号**: {masked_account}\n"
+            f"**错误信息**: {message}\n"
+            f"**时间**: {now.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"---\n{ip_info}"
+        )
 
-        if success:
-            title = "✅ NodeLoc 签到成功"
-            content = (
-                f"**账号**: {username}\n"
-                f"**状态**: {message}\n"
-                f"**获得能量**: {points} 点\n"
-                f"**时间**: {now.strftime('%Y-%m-%d %H:%M:%S')}"
-            )
-        else:
-            title = "❌ NodeLoc 签到失败"
-            content = (
-                f"**账号**: {username}\n"
-                f"**错误信息**: {message}\n"
-                f"**时间**: {now.strftime('%Y-%m-%d %H:%M:%S')}"
-            )
-        notifier.send_message(title, content)
+    # 发送所有通知
+    send_all_notifications(title, content, config)
 
     sys.exit(0 if success else 1)
 
