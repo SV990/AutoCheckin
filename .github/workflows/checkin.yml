@@ -2,8 +2,8 @@ name: NodeLoc 每日签到
 
 on:
   schedule:
-    # 每小时整点触发一次
-    - cron: '0 * * * *'
+    # 每小时整点触发一次（UTC 16:00-22:00 对应北京时间 00:00-06:00）
+    - cron: '0 16-22 * * *'
   workflow_dispatch:
     inputs:
       force_checkin:
@@ -37,14 +37,9 @@ jobs:
           NODELOC_PASSWORD: ${{ secrets.NODELOC_PASSWORD }}
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
           FEISHU_SECRET: ${{ secrets.FEISHU_SECRET }}
+          WECOM_WEBHOOK_URL: ${{ secrets.WECOM_WEBHOOK_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           FORCE_CHECKIN: ${{ github.event.inputs.force_checkin == 'true' && 'true' || 'false' }}
         run: |
           python checkin.py
-
-      - name: Upload log artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: checkin-log-${{ github.run_id }}
-          path: checkin.log
-          if-no-files-found: ignore
