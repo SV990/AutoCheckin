@@ -1,38 +1,16 @@
 # NodeLoc 每日自动签到
 
-NodeLoc 论坛 (https://www.nodeloc.com/) 每日自动签到脚本，支持 GitHub Actions 定时执行和飞书通知。
+NodeLoc 论坛 (https://www.nodeloc.com/) 每日自动签到脚本，支持 GitHub Actions 定时执行、多种通知渠道和 IP 信息获取。
 
 ## 功能
 
 - 自动登录 NodeLoc 账号
-- 每日 00:00-06:00 时间段随机签到
-- 支持飞书 Webhook 推送签到结果
-- 支持 GitHub Actions 定时调度
+- 每日 00:00-06:00 时间段随机签到（每天仅触发一次）
+- 支持飞书 / 企业微信 / Telegram 通知
+- 签到时获取公网 IP 信息（IP、位置、ISP）
+- 账号脱敏处理，保护隐私
 - 使用 curl_cffi 模拟浏览器 TLS 指纹，绕过 Cloudflare 检测
-
-## 本地使用
-
-### 安装依赖
-
-```bash
-pip install -r requirements.txt
-```
-
-### 运行签到
-
-```bash
-# 普通运行（仅限 00:00-06:00 时间段执行）
-python checkin.py
-
-# 强制签到（忽略时间段限制）
-FORCE_CHECKIN=true python checkin.py
-
-# 使用自定义账号密码
-NODELOC_USERNAME="your@email.com" NODELOC_PASSWORD="your_password" python checkin.py
-
-# 带上飞书通知
-FEISHU_WEBHOOK_URL="https://open.feishu.cn/open-apis/bot/v2/hook/xxx" python checkin.py
-```
+- 所有请求设置超时，防止卡死
 
 ## 配置说明
 
@@ -43,7 +21,10 @@ FEISHU_WEBHOOK_URL="https://open.feishu.cn/open-apis/bot/v2/hook/xxx" python che
 | `NODELOC_USERNAME` | 是 | NodeLoc 账号（邮箱） |
 | `NODELOC_PASSWORD` | 是 | NodeLoc 密码 |
 | `FEISHU_WEBHOOK_URL` | 否 | 飞书机器人 Webhook 地址 |
-| `FEISHU_SECRET` | 否 | 飞书机器人签名密钥（可选） |
+| `FEISHU_SECRET` | 否 | 飞书机器人签名密钥 |
+| `WECOM_WEBHOOK_URL` | 否 | 企业微信群机器人 Webhook 地址 |
+| `TELEGRAM_BOT_TOKEN` | 否 | Telegram Bot Token |
+| `TELEGRAM_CHAT_ID` | 否 | Telegram 接收消息的 Chat ID |
 | `FORCE_CHECKIN` | 否 | 设为 `true` 强制签到，忽略时间段限制 |
 
 ### 飞书机器人配置
@@ -52,6 +33,19 @@ FEISHU_WEBHOOK_URL="https://open.feishu.cn/open-apis/bot/v2/hook/xxx" python che
 2. 复制 Webhook 地址
 3. （可选）开启签名校验并复制密钥
 4. 将 Webhook 地址配置到 `FEISHU_WEBHOOK_URL`
+
+### 企业微信机器人配置
+
+1. 在企业微信群聊中添加"群机器人"
+2. 复制 Webhook 地址
+3. 将 Webhook 地址配置到 `WECOM_WEBHOOK_URL`
+
+### Telegram Bot 配置
+
+1. 使用 `@BotFather` 创建 Bot，获取 Token
+2. 将 Bot 添加到目标群组或对话
+3. 获取 Chat ID（发送消息给 `@userinfobot` 或访问 `https://api.telegram.org/bot<token>/getUpdates`）
+4. 配置 `TELEGRAM_BOT_TOKEN` 和 `TELEGRAM_CHAT_ID`
 
 ## 部署到 GitHub
 
@@ -69,6 +63,9 @@ FEISHU_WEBHOOK_URL="https://open.feishu.cn/open-apis/bot/v2/hook/xxx" python che
 | `NODELOC_PASSWORD` | 是 | NodeLoc 密码 |
 | `FEISHU_WEBHOOK_URL` | 否 | 飞书机器人 Webhook 地址 |
 | `FEISHU_SECRET` | 否 | 飞书机器人签名密钥 |
+| `WECOM_WEBHOOK_URL` | 否 | 企业微信群机器人 Webhook 地址 |
+| `TELEGRAM_BOT_TOKEN` | 否 | Telegram Bot Token |
+| `TELEGRAM_CHAT_ID` | 否 | Telegram Chat ID |
 
 ### 3. 启用 Actions
 
@@ -79,13 +76,27 @@ FEISHU_WEBHOOK_URL="https://open.feishu.cn/open-apis/bot/v2/hook/xxx" python che
 
 ### 4. 定时执行
 
-工作流配置为每天 UTC 16:00（北京时间 00:00）触发，脚本会在 00:00-06:00 时间段内随机延迟后执行签到。
+工作流配置为每天 UTC 16:00（北京时间 00:00）触发一次，脚本会在 00:00-06:00 时间段内随机延迟后执行签到。
 
 如需修改触发时间，编辑 `.github/workflows/checkin.yml` 中的 cron 表达式：
 
 ```yaml
 schedule:
   - cron: '0 16 * * *'  # UTC 16:00 = 北京时间 00:00
+```
+
+## 签到通知示例
+
+```
+✅ NodeLoc 签到成功
+账号: s*****5@163.com
+状态: 签到成功，获得 10 点能量
+获得能量: 10 点
+时间: 2026-07-28 00:15:30
+---
+IP: 1.2.3.4
+位置: 中国 / 山西 / 太原
+ISP: China Unicom
 ```
 
 ## 项目结构
@@ -107,10 +118,13 @@ schedule:
 - **Discourse API**: NodeLoc 使用 Discourse 论坛系统，签到插件为 `discourse-checkin`
 - **API 流程**: 获取 CSRF Token → 登录 → 调用 `/checkin` 接口签到
 - **随机签到**: 脚本会在触发后随机延迟一段时间（最多 1 小时），模拟真人签到习惯
+- **时区处理**: 统一使用北京时间（UTC+8），避免时区混乱
+- **账号脱敏**: 通知中的账号会自动脱敏为 `s*****5@domain` 格式
 
 ## 注意事项
 
 - 请勿将账号密码硬编码在代码中，务必使用 GitHub Secrets
 - 签到接口需要登录态，脚本会自动处理
 - 如果签到失败，可以查看 GitHub Actions 的运行日志排查问题
-- 飞书通知为可选功能，不配置 `FEISHU_WEBHOOK_URL` 时不会发送通知
+- 多种通知渠道互相独立，配置任意一个即可使用
+- 本地运行时会获取本机 IP 信息，GitHub Actions 运行时会获取服务器 IP
