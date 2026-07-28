@@ -2,8 +2,8 @@ name: NodeLoc 每日签到
 
 on:
   schedule:
-    # 每小时整点触发一次（UTC 16:00-22:00 对应北京时间 00:00-06:00）
-    - cron: '0 16-22 * * *'
+    # 每天 UTC 16:00 触发（北京时间 00:00），脚本内随机延迟至 00:00-06:00 之间签到
+    - cron: '0 16 * * *'
   workflow_dispatch:
     inputs:
       force_checkin:
