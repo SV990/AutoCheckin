@@ -377,27 +377,32 @@ class NodeLocCheckin:
                 if response.status_code == HTTP_OK:
                     result = response.json()
                     message: str = result.get("message", "")
+                    errors = result.get("errors", "")
                     points: int = result.get("points", 0)
+                    msg_str = str(message or errors)
+                    
+                    # 打印原始响应用于调试
+                    if attempt == 0:
+                        print(f"[DEBUG] API响应: success={result.get('success')}, message={msg_str}, points={points}")
 
-                    # 基于 success 字段判断，同时兼容特殊情况
+                    # 签到成功
                     if result.get("success"):
                         print(f"[SUCCESS] 签到成功！获得 {points} 点能量")
-                        return True, message or f"签到成功，获得 {points} 点能量", points
+                        return True, msg_str or f"签到成功，获得 {points} 点能量", points
 
                     # 已签到状态（今天签过了）
-                    msg_str = str(message)
-                    if "已签到" in msg_str or "重复" in msg_str:
-                        print(f"[INFO] {message}")
-                        return True, message, points
+                    if any(kw in msg_str for kw in ["已签到", "重复", "今天", "已经"]):
+                        print(f"[INFO] {msg_str}")
+                        return True, msg_str, points
 
                     # 签到限制（不是真正的失败）
-                    if "限制" in msg_str or "频繁" in msg_str:
-                        last_error = message
+                    if any(kw in msg_str for kw in ["限制", "频繁", "冷却"]):
+                        last_error = msg_str
                         if attempt < max_retries:
                             continue
 
-                    print(f"[ERROR] 签到失败: {message}")
-                    return False, message, 0
+                    print(f"[ERROR] 签到失败: {msg_str}")
+                    return False, msg_str, 0
 
                 elif response.status_code in HTTP_TEMPORARY_ERRORS:
                     # 临时错误（限流、服务不可用、网关错误）
