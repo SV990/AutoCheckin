@@ -6,11 +6,50 @@ NodeLoc 论坛 (https://www.nodeloc.com/) 每日自动签到脚本，支持 GitH
 
 - 自动登录 NodeLoc 账号
 - 每日 00:00-06:00 时间段随机签到（每天仅触发一次）
+- **签到重试机制**：签到失败时自动重试 2 次，递增等待时间
+- **并发通知**：所有通知渠道并发发送，互不阻塞
 - 支持飞书 / 企业微信 / Telegram 通知
-- 签到时获取公网 IP 信息（IP、位置、ISP）
-- 账号脱敏处理，保护隐私
+- 签到时获取公网 IP 信息（IP、位置、ISP），支持多 IP 接口重试
 - 使用 curl_cffi 模拟浏览器 TLS 指纹，绕过 Cloudflare 检测
 - 所有请求设置超时，防止卡死
+- 完整类型提示，代码结构清晰
+
+## 环境要求
+
+- Python 3.10+
+- 依赖：curl_cffi
+
+## 本地运行
+
+### 1. 安装依赖
+
+```bash
+pip install -r requirements.txt
+```
+
+### 2. 设置环境变量
+
+**Windows PowerShell:**
+```powershell
+$env:NODELOC_USERNAME='your-email@example.com'
+$env:NODELOC_PASSWORD='your-password'
+python checkin.py
+```
+
+**Linux / macOS:**
+```bash
+export NODELOC_USERNAME='your-email@example.com'
+export NODELOC_PASSWORD='your-password'
+python checkin.py
+```
+
+### 3. 强制签到（忽略时间段限制）
+
+```bash
+$env:FORCE_CHECKIN='true'  # Windows
+export FORCE_CHECKIN='true'  # Linux/macOS
+python checkin.py
+```
 
 ## 配置说明
 
@@ -87,13 +126,34 @@ schedule:
 
 ## 签到通知示例
 
+### 成功通知
+
 ```
-✅ NodeLoc 签到成功
-账号: s*****5@163.com
-状态: 签到成功，获得 10 点能量
-获得能量: 10 点
-时间: 2026-07-28 00:15:30
+🎉 NodeLoc 签到成功
+
+📅 签到日期: 2026-07-28
+⏰ 签到时间: 00:15:30
+👤 账号: user@example.com
+✨ 状态: 签到成功，获得 10 点能量
+⚡ 获得能量: 10 点
 ---
+🌐 网络信息
+IP: 1.2.3.4
+位置: 中国 / 山西 / 太原
+ISP: China Unicom
+```
+
+### 失败通知
+
+```
+⚠️ NodeLoc 签到失败
+
+📅 日期: 2026-07-28
+⏰ 时间: 00:15:30
+👤 账号: user@example.com
+❌ 错误: 账号或密码错误
+---
+🌐 网络信息
 IP: 1.2.3.4
 位置: 中国 / 山西 / 太原
 ISP: China Unicom
@@ -119,7 +179,9 @@ ISP: China Unicom
 - **API 流程**: 获取 CSRF Token → 登录 → 调用 `/checkin` 接口签到
 - **随机签到**: 脚本会在触发后随机延迟一段时间（最多 1 小时），模拟真人签到习惯
 - **时区处理**: 统一使用北京时间（UTC+8），避免时区混乱
-- **账号脱敏**: 通知中的账号会自动脱敏为 `s*****5@domain` 格式
+- **重试机制**: 签到失败后自动重试 2 次，每次递增等待时间（2秒、4秒）；IP 获取支持重试
+- **并发通知**: 使用多线程并发发送通知，提高执行效率
+- **状态码常量化**: HTTP 状态码统一管理，便于维护
 
 ## 注意事项
 
@@ -128,3 +190,4 @@ ISP: China Unicom
 - 如果签到失败，可以查看 GitHub Actions 的运行日志排查问题
 - 多种通知渠道互相独立，配置任意一个即可使用
 - 本地运行时会获取本机 IP 信息，GitHub Actions 运行时会获取服务器 IP
+- GitHub Actions 工作流使用 Node.js 24，需保持 action 版本为最新
