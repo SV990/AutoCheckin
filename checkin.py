@@ -577,7 +577,7 @@ def main() -> None:
             f"✨ **状态**: {message}\n"
             f"⚡ **获得能量**: **{points}** 点\n"
             f"---\n"
-            f"🌐 **网络信息**\n{ip_info}"
+            f"{ip_info}"
         )
     else:
         title = "⚠️ NodeLoc 签到失败"
@@ -587,7 +587,7 @@ def main() -> None:
             f"👤 **账号**: `{username}`\n"
             f"❌ **错误**: {message}\n"
             f"---\n"
-            f"🌐 **网络信息**\n{ip_info}"
+            f"{ip_info}"
         )
 
     # 发送所有通知
