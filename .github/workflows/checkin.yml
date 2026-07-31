@@ -42,4 +42,4 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           FORCE_CHECKIN: ${{ github.event.inputs.force_checkin || 'false' }}
         run: |
-          python checkin.py
+          python -m nodeloc_checkin
